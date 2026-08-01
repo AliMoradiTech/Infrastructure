@@ -1,0 +1,191 @@
+name: infra-backing-services
+
+networks:
+  shared-network:
+    name: shared-app-network
+    driver: bridge
+
+volumes:
+  sqlserver_data:
+  redis_data:
+  kafka_data:
+  minio_data:
+  seq_data:
+  mailpit_data:
+
+services:
+  # 1. SQL Server with one database per microservice.
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: infra-sqlserver
+    restart: always
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: YourStrong!Passw0rd
+      MSSQL_PID: Developer
+    ports:
+      - "14330:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - shared-network
+
+  # One-time database and service-login initialization after SQL Server is healthy.
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: infra-sqlserver-init
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: YourStrong!Passw0rd
+      DATABASES_TO_CREATE: IAM,Notification
+      SERVICE_DB_PASSWORD: Svc!Passw0rd123
+    volumes:
+      - ./create-databases.sh:/scripts/create-databases.sh:ro
+    entrypoint: ["/bin/bash", "/scripts/create-databases.sh"]
+    restart: "no"
+    networks:
+      - shared-network
+
+  # 2. Redis cache.
+  redis:
+    image: redis:7-alpine
+    container_name: infra-redis
+    restart: always
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shared-network
+
+  # 3. Kafka in single-node KRaft mode for local development.
+  kafka:
+    image: apache/kafka:latest
+    container_name: infra-kafka
+    restart: always
+    ports:
+      - "19094:9094"  # Host listener for local applications.
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks:
+      - shared-network
+
+  # 4. Kafka management dashboard.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: infra-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      AUTH_TYPE: LOGIN_FORM
+      SPRING_SECURITY_USER_NAME: kafkaadmin
+      SPRING_SECURITY_USER_PASSWORD: KafkaUi123!
+    ports:
+      - "18080:8080"
+    networks:
+      - shared-network
+
+  # 5. Seq centralized logging.
+  seq:
+    image: datalust/seq:latest
+    container_name: infra-seq
+    restart: always
+    environment:
+      - ACCEPT_EULA=Y
+      - SEQ_FIRSTRUN_ADMINPASSWORD=AdminPass123!
+      - SEQ_FIRSTRUN_NOAUTHENTICATION=true
+    ports:
+      - "15341:5341"
+      - "18082:80"
+    volumes:
+      - seq_data:/data
+    networks:
+      - shared-network
+
+  # 6. Jaeger distributed-tracing backend.
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: infra-jaeger
+    restart: always
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16696:16686"  # Web UI.
+      - "14317:4317"   # OTLP gRPC.
+      - "14318:4318"   # OTLP HTTP.
+    networks:
+      - shared-network
+
+  # 7. MinIO-compatible object storage for local development.
+  minio:
+    image: ghcr.io/librefs/librefs:latest
+    container_name: infra-minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin12345
+    ports:
+      - "19000:9000"  # S3-compatible API.
+      - "19001:9001"  # Web console.
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shared-network
+
+  # 8. Mailpit SMTP server and persistent inbox for Notification Service.
+  mailpit:
+    image: axllent/mailpit:v1.22
+    container_name: infra-mailpit
+    restart: unless-stopped
+    ports:
+      - "11025:1025"
+      - "18025:8025"
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_UI_AUTH: "mailpit:Mailpit123!"
+    volumes:
+      - mailpit_data:/data
+    networks:
+      - shared-network
