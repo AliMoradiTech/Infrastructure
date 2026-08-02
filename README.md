@@ -64,3 +64,9 @@ Password: Mailpit123!
 ## Networking
 
 All containers join the `shared-app-network` Docker network. Applications running directly on the host should use the host addresses listed above; containerized applications should use Docker service names and internal container ports.
+
+## Stress testing
+
+The optional k6 harness can generate an exact number of registration requests and verify the resulting users, outbox events, emails, and pending push notifications. It starts at 1,000 requests and is configurable up to 1,000,000 without editing the script.
+
+See [`load-tests/README.md`](./load-tests/README.md) before running it. The load generator uses the opt-in `load-test` Compose profile and is never started by a normal `docker compose up`.

@@ -185,7 +185,27 @@ services:
     environment:
       MP_DATABASE: /data/mailpit.db
       MP_UI_AUTH: "mailpit:Mailpit123!"
+      MP_MAX_MESSAGES: "100000"
     volumes:
       - mailpit_data:/data
+    networks:
+      - shared-network
+
+  # Opt-in end-to-end registration load generator. Run with the load-test profile.
+  k6:
+    image: grafana/k6:2.0.0
+    profiles: ["load-test"]
+    environment:
+      BASE_URL: ${BASE_URL:-http://host.docker.internal:5066}
+      TOTAL_REQUESTS: ${TOTAL_REQUESTS:-1000}
+      VUS: ${VUS:-50}
+      MAX_DURATION: ${MAX_DURATION:-30m}
+      RUN_ID: ${RUN_ID:-loadtest}
+      TEST_PASSWORD: ${TEST_PASSWORD:-LoadTest!12345}
+    volumes:
+      - ./load-tests:/scripts:ro
+    command: ["run", "/scripts/registration.js"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - shared-network
