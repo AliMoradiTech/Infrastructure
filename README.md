@@ -65,6 +65,14 @@ Password: Mailpit123!
 
 All containers join the `shared-app-network` Docker network. Applications running directly on the host should use the host addresses listed above; containerized applications should use Docker service names and internal container ports.
 
+## Distributed tracing
+
+Jaeger receives OTLP traces from both application services. Start the infrastructure and both services, then open <http://localhost:16696>. Select `IdentityService` or `NotificationService` in the **Service** filter to inspect HTTP, Entity Framework, outbox publishing, Kafka producer, and Kafka consumer spans.
+
+For applications running on the host, the OTLP gRPC endpoint is `http://localhost:14317`. For applications running on `shared-app-network`, use `http://jaeger:4317` instead. A registration request carries its trace context into the outbox message and Kafka headers, so the resulting notification work appears in the same distributed trace.
+
+If no trace is visible, first verify that the `jaeger` container is running, then confirm each application's `OpenTelemetry:OtlpEndpoint` setting points to the appropriate endpoint.
+
 ## Stress testing
 
 The optional k6 harness can generate an exact number of registration requests and verify the resulting users, outbox events, emails, and pending push notifications. It starts at 1,000 requests and is configurable up to 1,000,000 without editing the script.
