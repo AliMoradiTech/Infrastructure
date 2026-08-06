@@ -191,6 +191,44 @@ services:
     networks:
       - shared-network
 
+  # Template-aware Notification Service. SMTP is captured by Mailpit in local Docker.
+  notification-service:
+    build:
+      context: ../Nofification Service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    restart: unless-stopped
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__NotificationDatabase: Server=sqlserver,1433;Database=Notification;User Id=notification_svc;Password=Svc!Passw0rd123;TrustServerCertificate=True;Encrypt=False
+      ConnectionStrings__Redis: redis:6379
+      Kafka__BootstrapServers: kafka:9092
+      EmailSettings__SmtpHost: mailpit
+      EmailSettings__SmtpPort: 1025
+      EmailSettings__EnableSsl: "false"
+      EmailSettings__ProviderOrder__0: smtp
+      Notifications__PayloadEncryptionKey: ${NOTIFICATION_PAYLOAD_KEY:?Set NOTIFICATION_PAYLOAD_KEY to a base64-encoded 32-byte secret}
+      Notifications__PublicBaseUrl: http://localhost:15080
+      Authentication__Authority: http://host.docker.internal:5066/
+      Authentication__Audience: notification-api
+      OpenTelemetry__OtlpEndpoint: http://jaeger:4317
+      Seq__ServerUrl: http://seq:5341
+    ports:
+      - "15080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - shared-network
+
   # Opt-in end-to-end registration load generator. Run with the load-test profile.
   k6:
     image: grafana/k6:2.0.0
